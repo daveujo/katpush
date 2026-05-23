@@ -211,13 +211,18 @@ jobs:
 
           # Inject auth-profiles.json from secret
           if [ -n "$OPENCLAW_AUTH_PROFILES" ]; then
-            echo "$OPENCLAW_AUTH_PROFILES" > "$OPENCLAW_DIR/agents/main/agent/auth-profiles.json"
+            cat > "$OPENCLAW_DIR/agents/main/agent/auth-profiles.json" <<-'JSONEOF'
+            ${{ secrets.OPENCLAW_AUTH_PROFILES }}
+            JSONEOF
             echo "Injected auth-profiles.json from secret"
           else
             echo "WARNING: No OPENCLAW_AUTH_PROFILES secret found"
           fi
 
           echo "OpenClaw configured"
+          echo "=== AUTH PROFILES CHECK ==="
+          wc -c "$OPENCLAW_DIR/agents/main/agent/auth-profiles.json"
+          head -3 "$OPENCLAW_DIR/agents/main/agent/auth-profiles.json"
 
       - name: Find previous workspace artifact
         id: find-artifact
