@@ -211,9 +211,8 @@ jobs:
 
           # Inject auth-profiles.json from secret
           if [ -n "$OPENCLAW_AUTH_PROFILES" ]; then
-            cat > "$OPENCLAW_DIR/agents/main/agent/auth-profiles.json" <<-'JSONEOF'
-            ${{ secrets.OPENCLAW_AUTH_PROFILES }}
-            JSONEOF
+            printf '%s\n' "$OPENCLAW_AUTH_PROFILES" > "$OPENCLAW_DIR/agents/main/agent/auth-profiles.json"
+            head -1 "$OPENCLAW_DIR/agents/main/agent/auth-profiles.json"
             echo "Injected auth-profiles.json from secret"
           else
             echo "WARNING: No OPENCLAW_AUTH_PROFILES secret found"
