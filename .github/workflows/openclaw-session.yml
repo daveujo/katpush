@@ -200,7 +200,7 @@ jobs:
             # Remove stale plugin entries that can cause warning noise or startup friction.
             if command -v jq >/dev/null 2>&1; then
               tmp_cfg=$(mktemp)
-              jq 'del(.plugins.entries["google-antigravity-auth"])' "$OPENCLAW_DIR/openclaw.json" > "$tmp_cfg" && mv "$tmp_cfg" "$OPENCLAW_DIR/openclaw.json"
+              jq 'del(.plugins.entries["google-antigravity-auth"]) | .gateway.mode = "local" | .gateway.port = 18789' "$OPENCLAW_DIR/openclaw.json" > "$tmp_cfg" && mv "$tmp_cfg" "$OPENCLAW_DIR/openclaw.json"
             fi
 
             echo "Injected openclaw.json from secret (paths fixed to $HOME)"
@@ -366,6 +366,8 @@ jobs:
 
       # ========== START OPENCLAW ==========
       - name: Start OpenClaw gateway
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           export NPM_CONFIG_PREFIX="$HOME/.npm-global"
           export PATH="$HOME/.npm-global/bin:$PATH"
@@ -378,7 +380,7 @@ jobs:
           export PLAYWRIGHT_CHROMIUM_USE_HEADLESS_NEW=1
 
           # Start OpenClaw gateway in background
-          nohup openclaw gateway > /tmp/openclaw.log 2>&1 &
+          nohup openclaw gateway --allow-unconfigured > /tmp/openclaw.log 2>&1 &
           OPENCLAW_PID=$!
           echo "$OPENCLAW_PID" > /tmp/openclaw.pid
 
@@ -411,6 +413,8 @@ jobs:
           echo "--- end startup log ---"
 
       - name: Start OpenClaw managed browser
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           export NPM_CONFIG_PREFIX="$HOME/.npm-global"
           export PATH="$HOME/.npm-global/bin:$PATH"
@@ -426,7 +430,7 @@ jobs:
               echo "Gateway process is not running anymore, restarting..."
               export OPENCLAW_STATE_DIR="$HOME/.openclaw"
               export OPENCLAW_WORKSPACE="$HOME/.openclaw/workspace"
-              nohup openclaw gateway >> /tmp/openclaw.log 2>&1 &
+              nohup openclaw gateway --allow-unconfigured >> /tmp/openclaw.log 2>&1 &
               OPENCLAW_PID=$!
               echo "$OPENCLAW_PID" > /tmp/openclaw.pid
             fi
