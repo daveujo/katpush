@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   openclaw-session:
-    
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -200,7 +200,7 @@ jobs:
             # Remove stale plugin entries that can cause warning noise or startup friction.
             if command -v jq >/dev/null 2>&1; then
               tmp_cfg=$(mktemp)
-              jq 'del(.plugins.entries["google-antigravity-auth"]) | .gateway.mode = "local" | .gateway.port = 18789' "$OPENCLAW_DIR/openclaw.json" > "$tmp_cfg" && mv "$tmp_cfg" "$OPENCLAW_DIR/openclaw.json"
+              jq 'del(.plugins.entries["google-antigravity-auth"]) | .gateway.mode = "local" | .gateway.port = 18789 | .gateway.auth.mode = "token" | .gateway.auth.token = "openclaw" | .gateway.remote.token = "openclaw"' "$OPENCLAW_DIR/openclaw.json" > "$tmp_cfg" && mv "$tmp_cfg" "$OPENCLAW_DIR/openclaw.json"
             fi
 
             echo "Injected openclaw.json from secret (paths fixed to $HOME)"
@@ -373,6 +373,7 @@ jobs:
           export PATH="$HOME/.npm-global/bin:$PATH"
           export OPENCLAW_STATE_DIR="$HOME/.openclaw"
           export OPENCLAW_WORKSPACE="$HOME/.openclaw/workspace"
+          export OPENCLAW_GATEWAY_TOKEN="openclaw"
           export PLAYWRIGHT_BROWSERS_PATH="$HOME/.playwright-browsers"
           PORT=${{ env.OPENCLAW_PORT }}
 
@@ -418,6 +419,7 @@ jobs:
         run: |
           export NPM_CONFIG_PREFIX="$HOME/.npm-global"
           export PATH="$HOME/.npm-global/bin:$PATH"
+          export OPENCLAW_GATEWAY_TOKEN="openclaw"
           export PLAYWRIGHT_BROWSERS_PATH="$HOME/.playwright-browsers"
           GATEWAY_PORT=${{ env.OPENCLAW_PORT }}
 
