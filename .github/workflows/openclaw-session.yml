@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   openclaw-session:
-    
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -161,9 +161,10 @@ jobs:
           # CloakBrowser does not need playwright install chromium.
           # It only needs Playwright system dependencies.
           npx playwright install-deps chromium 2>/dev/null || true
+          npx playwright install chromium 2>/dev/null || true
       
           # Pre-download / verify CloakBrowser binary using official JS utility
-          node --input-type=module - <<'NODE'
+          node --input-type=module - <<'NODE' || true
           import { ensureBinary, binaryInfo } from 'cloakbrowser';
       
           try {
@@ -171,8 +172,7 @@ jobs:
             console.log('CloakBrowser binary ready');
             console.log(binaryInfo());
           } catch (err) {
-            console.error(err);
-            process.exit(1);
+            console.warn('WARNING: CloakBrowser binary download failed (non-critical, gateway will fallback):', err.message || err);
           }
           NODE
       
@@ -276,6 +276,16 @@ jobs:
 
           if [ -n "$(find "$WORKSPACE" -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then
             echo "Workspace artifact restored into $WORKSPACE"
+
+            if [ -d "$WORKSPACE/.openclaw-state/agents" ]; then
+              echo "Restoring persistent agent session history & memory state..."
+              mkdir -p "$HOME/.openclaw/agents"
+              cp -r "$WORKSPACE/.openclaw-state/agents/"* "$HOME/.openclaw/agents/" 2>/dev/null || true
+            fi
+            if [ -d "$WORKSPACE/.openclaw-state/memory" ]; then
+              mkdir -p "$HOME/.openclaw/memory"
+              cp -r "$WORKSPACE/.openclaw-state/memory/"* "$HOME/.openclaw/memory/" 2>/dev/null || true
+            fi
           else
             echo "WARNING: Workspace artifact download completed, but workspace is empty"
           fi
@@ -763,6 +773,17 @@ jobs:
           if [ ! -d "$WORKSPACE" ]; then
             echo "No workspace to clean"
             exit 0
+          fi
+
+          echo "Preserving agent session history & memory state into workspace..."
+          mkdir -p "$WORKSPACE/.openclaw-state"
+          if [ -d "$HOME/.openclaw/agents" ]; then
+            mkdir -p "$WORKSPACE/.openclaw-state/agents"
+            cp -r "$HOME/.openclaw/agents/"* "$WORKSPACE/.openclaw-state/agents/" 2>/dev/null || true
+          fi
+          if [ -d "$HOME/.openclaw/memory" ]; then
+            mkdir -p "$WORKSPACE/.openclaw-state/memory"
+            cp -r "$HOME/.openclaw/memory/"* "$WORKSPACE/.openclaw-state/memory/" 2>/dev/null || true
           fi
 
           echo "Cleaning transient/large files from workspace before upload..."
