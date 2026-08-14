@@ -248,12 +248,13 @@ jobs:
             fi
           done
 
-          # Find the latest artifact
-          ARTIFACT_INFO=$(gh api "repos/$REPO/actions/artifacts" --jq '[.artifacts[] | select(.name == "openclaw-workspace" and .expired == false)] | first | "\(.id) \(.workflow_run.id)"' 2>/dev/null || echo "")
+          CURRENT_RUN_ID="${{ github.run_id }}"
+          ARTIFACT_INFO=$(gh api "repos/$REPO/actions/artifacts?per_page=100" --jq "[.artifacts[] | select(.name == \"openclaw-workspace\" and .expired == false and (.workflow_run.id != $CURRENT_RUN_ID))] | sort_by(.created_at) | reverse | first | \"\(.id) \(.workflow_run.id)\"" 2>/dev/null || echo "")
 
-          if [ -n "$ARTIFACT_INFO" ] && [ "$ARTIFACT_INFO" != "null null" ]; then
+          if [ -n "$ARTIFACT_INFO" ] && [ "$ARTIFACT_INFO" != "null null" ] && [ "$ARTIFACT_INFO" != "" ]; then
             RUN_ID=$(echo "$ARTIFACT_INFO" | awk '{print $2}')
-            echo "Found workspace artifact from run: $RUN_ID"
+            ARTIFACT_ID=$(echo "$ARTIFACT_INFO" | awk '{print $1}')
+            echo "Found workspace artifact (ID: $ARTIFACT_ID) from run: $RUN_ID"
             echo "RUN_ID=$RUN_ID" >> "$GITHUB_OUTPUT"
             echo "FOUND=true" >> "$GITHUB_OUTPUT"
           else
@@ -268,27 +269,35 @@ jobs:
         run: |
           REPO="${{ github.repository }}"
           RUN_ID="${{ steps.find-artifact.outputs.RUN_ID }}"
-          WORKSPACE="$HOME/.openclaw/workspace"
+          OPENCLAW_DIR="$HOME/.openclaw"
+          WORKSPACE="$OPENCLAW_DIR/workspace"
+          RESTORE_TMP="/tmp/restore-artifact"
 
+          mkdir -p "$RESTORE_TMP"
           mkdir -p "$WORKSPACE"
+
           echo "Downloading openclaw-workspace from run $RUN_ID..."
-          gh run download "$RUN_ID" --repo "$REPO" --name openclaw-workspace --dir "$WORKSPACE"
+          gh run download "$RUN_ID" --repo "$REPO" --name openclaw-workspace --dir "$RESTORE_TMP" 2>&1 || true
 
-          if [ -n "$(find "$WORKSPACE" -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then
-            echo "Workspace artifact restored into $WORKSPACE"
-
+          if [ -f "$RESTORE_TMP/openclaw-backup.tar.gz" ]; then
+            echo "Extracting complete OpenClaw state (workspace + agents + memory)..."
+            tar -xzf "$RESTORE_TMP/openclaw-backup.tar.gz" -C "$OPENCLAW_DIR"
+            echo "Complete OpenClaw state restored from tarball"
+          elif [ -n "$(find "$RESTORE_TMP" -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then
+            echo "Restoring legacy workspace files..."
+            cp -r "$RESTORE_TMP/"* "$WORKSPACE/" 2>/dev/null || true
             if [ -d "$WORKSPACE/.openclaw-state/agents" ]; then
-              echo "Restoring persistent agent session history & memory state..."
-              mkdir -p "$HOME/.openclaw/agents"
-              cp -r "$WORKSPACE/.openclaw-state/agents/"* "$HOME/.openclaw/agents/" 2>/dev/null || true
+              mkdir -p "$OPENCLAW_DIR/agents"
+              cp -r "$WORKSPACE/.openclaw-state/agents/"* "$OPENCLAW_DIR/agents/" 2>/dev/null || true
             fi
             if [ -d "$WORKSPACE/.openclaw-state/memory" ]; then
-              mkdir -p "$HOME/.openclaw/memory"
-              cp -r "$WORKSPACE/.openclaw-state/memory/"* "$HOME/.openclaw/memory/" 2>/dev/null || true
+              mkdir -p "$OPENCLAW_DIR/memory"
+              cp -r "$WORKSPACE/.openclaw-state/memory/"* "$OPENCLAW_DIR/memory/" 2>/dev/null || true
             fi
-          else
-            echo "WARNING: Workspace artifact download completed, but workspace is empty"
           fi
+
+          rm -rf "$RESTORE_TMP"
+          echo "Workspace restored: $(find "$WORKSPACE" -type f 2>/dev/null | wc -l) files"
 
       - name: Fix OpenClaw directory permissions
         run: |
@@ -765,95 +774,48 @@ jobs:
           echo "Secrets saved"
         continue-on-error: true
 
-      - name: Clean workspace before upload
+      - name: Package OpenClaw state & workspace
         if: always()
         run: |
-          WORKSPACE="$HOME/.openclaw/workspace"
+          OPENCLAW_DIR="$HOME/.openclaw"
+          WORKSPACE="$OPENCLAW_DIR/workspace"
+          BUNDLE_DIR="/tmp/openclaw-upload-bundle"
 
-          if [ ! -d "$WORKSPACE" ]; then
-            echo "No workspace to clean"
-            exit 0
-          fi
+          mkdir -p "$WORKSPACE"
+          mkdir -p "$BUNDLE_DIR"
 
-          echo "Preserving agent session history & memory state into workspace..."
-          mkdir -p "$WORKSPACE/.openclaw-state"
-          if [ -d "$HOME/.openclaw/agents" ]; then
-            mkdir -p "$WORKSPACE/.openclaw-state/agents"
-            cp -r "$HOME/.openclaw/agents/"* "$WORKSPACE/.openclaw-state/agents/" 2>/dev/null || true
-          fi
-          if [ -d "$HOME/.openclaw/memory" ]; then
-            mkdir -p "$WORKSPACE/.openclaw-state/memory"
-            cp -r "$HOME/.openclaw/memory/"* "$WORKSPACE/.openclaw-state/memory/" 2>/dev/null || true
-          fi
-
-          echo "Cleaning transient/large files from workspace before upload..."
-
-          # Remove stray openclaw.json copy (contains secrets — must NOT be in artifact)
+          # Remove sensitive config or transient cache
           rm -f "$WORKSPACE/openclaw.json"
+          find "$WORKSPACE" -type f \( -name "*.bak" -o -name "*.patched" -o -name "fix-*.mjs" \) -delete 2>/dev/null || true
+          find "$WORKSPACE" -type d \( -name "node_modules" -o -name "__pycache__" -o -name ".venv" -o -name "venv" -o -name ".cache" -o -name "tmp" \) -exec rm -rf {} + 2>/dev/null || true
 
-          # Remove patch experiment leftovers
-          find "$WORKSPACE" -type f \( -name "*.bak" -o -name "*.patched" \) -delete 2>/dev/null || true
-
-          # Remove debug scripts the agent may have created
-          find "$WORKSPACE" -type f -name "fix-*.mjs" -delete 2>/dev/null || true
-
-          # Remove known transient directories
-          find "$WORKSPACE" -type d \( -name "node_modules" -o -name "__pycache__" -o -name ".venv" -o -name "venv" -o -name ".cache" -o -name "cache" -o -name "tmp" -o -name "temp" -o -name "downloads" \) -exec rm -rf {} + 2>/dev/null || true
-
-          # Remove large/binary files
-          find "$WORKSPACE" -type f \( -name "*.mp4" -o -name "*.mkv" -o -name "*.avi" -o -name "*.mov" -o -name "*.webm" -o -name "*.mp3" -o -name "*.wav" -o -name "*.flac" -o -name "*.zip" -o -name "*.tar" -o -name "*.gz" -o -name "*.7z" -o -name "*.rar" -o -name "*.iso" -o -name "*.img" -o -name "*.exe" -o -name "*.msi" -o -name "*.bin" -o -name "*.dat" -o -name "*.psd" -o -name "*.raw" \) -delete 2>/dev/null || true
-
-          # Remove files larger than 10MB
-          find "$WORKSPACE" -type f -size +10M -delete 2>/dev/null || true
-
-          # Remove lock/pid files
-          find "$WORKSPACE" -type f \( -name "*.lock" -o -name "*.pid" \) -delete 2>/dev/null || true
-
-          # Remove empty directories
-          find "$WORKSPACE" -type d -empty -delete 2>/dev/null || true
-
-          # ---- Enforce 400MB hard budget (artifact limit is 500MB) ----
+          # Budget check
           MAX_MB=400
           CURRENT_KB=$(du -sk "$WORKSPACE" 2>/dev/null | cut -f1)
           CURRENT_MB=$((CURRENT_KB / 1024))
-          echo "Workspace size after cleanup: ${CURRENT_MB}MB (budget: ${MAX_MB}MB)"
-
           if [ "$CURRENT_MB" -gt "$MAX_MB" ]; then
-            echo "WARNING: Workspace exceeds ${MAX_MB}MB budget, pruning largest files..."
-
-            # Delete largest files first until under budget
             while [ "$CURRENT_MB" -gt "$MAX_MB" ]; do
               LARGEST=$(find "$WORKSPACE" -type f -printf '%s %p\n' 2>/dev/null | sort -rn | head -1)
-              if [ -z "$LARGEST" ]; then
-                echo "No more files to prune!"
-                break
-              fi
-              LARGEST_PATH=$(echo "$LARGEST" | cut -d' ' -f2-)
-              LARGEST_SIZE=$(echo "$LARGEST" | cut -d' ' -f1)
-              LARGEST_MB=$((LARGEST_SIZE / 1048576))
-              echo "  Pruning (${LARGEST_MB}MB): $LARGEST_PATH"
-              rm -f "$LARGEST_PATH"
+              if [ -z "$LARGEST" ]; then break; fi
+              rm -f "$(echo "$LARGEST" | cut -d' ' -f2-)"
               CURRENT_KB=$(du -sk "$WORKSPACE" 2>/dev/null | cut -f1)
               CURRENT_MB=$((CURRENT_KB / 1024))
             done
-
-            echo "Workspace after pruning: ${CURRENT_MB}MB"
-
-            # Clean up empty dirs left by pruning
-            find "$WORKSPACE" -type d -empty -delete 2>/dev/null || true
           fi
 
-          # Summary
-          FILE_COUNT=$(find "$WORKSPACE" -type f 2>/dev/null | wc -l)
-          SIZE=$(du -sh "$WORKSPACE" 2>/dev/null | cut -f1)
-          echo "Workspace ready for upload: $FILE_COUNT files, $SIZE"
+          # Create compressed backup of workspace, agents history, and memory
+          echo "Packaging openclaw-backup.tar.gz (workspace + agents + memory)..."
+          tar -czf "$BUNDLE_DIR/openclaw-backup.tar.gz" -C "$OPENCLAW_DIR" workspace agents memory 2>/dev/null || \
+          tar -czf "$BUNDLE_DIR/openclaw-backup.tar.gz" -C "$OPENCLAW_DIR" workspace
+
+          echo "Bundle created successfully: $(du -sh "$BUNDLE_DIR/openclaw-backup.tar.gz" | cut -f1)"
 
       - name: Upload workspace artifact
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: openclaw-workspace
-          path: /home/runner/.openclaw/workspace
+          path: /tmp/openclaw-upload-bundle
           retention-days: 90
           if-no-files-found: ignore
           overwrite: true
