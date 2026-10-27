@@ -26,7 +26,7 @@ env:
 jobs:
   openclaw-session:
     name: OpenClaw (${{ matrix.bot.name }})
-    
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -86,7 +86,7 @@ jobs:
           fi
 
           if [ -z "$OPENCLAW_CACHE_VERSION" ]; then
-            OPENCLAW_CACHE_VERSION="v1"
+            OPENCLAW_CACHE_VERSION="v2"
           fi
 
           JOB_START=$(date +%s)
@@ -100,7 +100,8 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '26'
+          check-latest: true
 
       # ========== CACHING ==========
       - name: Restore npm global packages cache
@@ -142,7 +143,7 @@ jobs:
 
           if [ "$CACHE_WORKING" = "false" ]; then
             echo "Installing openclaw@latest fresh..."
-            npm install -g openclaw@latest --allow-scripts=openclaw,@google/genai,koffi,tree-sitter-bash,protobufjs
+            npm install -g openclaw@latest --allow-scripts=openclaw,@google/genai,koffi,tree-sitter-bash,protobufjs,esbuild
           fi
 
       - name: Install CloakBrowser for browser control
@@ -214,8 +215,10 @@ jobs:
 
             if command -v jq >/dev/null 2>&1; then
               tmp_cfg=$(mktemp)
-              jq 'del(.plugins.entries["google-antigravity-auth"]) | .gateway.mode = "local" | .gateway.port = 18789 | .gateway.auth.mode = "token" | .gateway.auth.token = "openclaw" | .gateway.remote.token = "openclaw"' "$OPENCLAW_DIR/openclaw.json" > "$tmp_cfg" && mv "$tmp_cfg" "$OPENCLAW_DIR/openclaw.json"
+              jq 'del(.plugins.entries["google-antigravity-auth"], .meta, .env, .wizard, .browser.profiles[].color) | .gateway.mode = "local" | .gateway.port = 18789 | .gateway.auth.mode = "token" | .gateway.auth.token = "openclaw" | .gateway.remote.token = "openclaw"' "$OPENCLAW_DIR/openclaw.json" > "$tmp_cfg" && mv "$tmp_cfg" "$OPENCLAW_DIR/openclaw.json"
             fi
+
+            openclaw doctor --fix 2>&1 || true
 
             echo "Injected openclaw.json from secret for ${{ matrix.bot.name }}"
           else
